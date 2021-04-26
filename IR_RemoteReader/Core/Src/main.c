@@ -406,6 +406,11 @@ int main(void)
 		  printf(" %X%X%X%X%X %X%X%X%X %s\r\n", ir.buf[0]&0xF, ir.buf[1]&0xF, ir.buf[2]&0xF, ir.buf[3]&0xF, ir.buf[4]&0xF,
 				  	  	  	  	  	  	  	  (ir.buf[0]>>4)&0xF, (ir.buf[1]>>4)&0xF, (ir.buf[2]>>4)&0xF, (ir.buf[3]>>4)&0xF,
 											  ir.config[ir.curCfg].name);
+		  
+		  printf(" %X%X%X%X%X %X%X%X%X %s\r\n", msg.id_0, msg.id_1, msg.id_2, msg.id_3, msg.id_4,
+				  	 		counter_0, counter_1, counter_2, counter_3,
+							ir.config[ir.curCfg].name);
+		  
 		  IR_Test_HIGH;
 
 		  memset(ir.buf, 0 , 5);
