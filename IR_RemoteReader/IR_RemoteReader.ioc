@@ -84,6 +84,7 @@ GPIO.groupedBy=Group By Peripherals
 Mcu.Pin2=PC15-OSC32_OUT
 Mcu.Pin3=PH0 - OSC_IN
 Mcu.Pin4=PH1 - OSC_OUT
+NVIC.EXTI15_10_IRQn=true\:0\:0\:false\:false\:true\:true\:true
 RCC.VCOI2SOutputFreq_Value=192000000
 Mcu.Pin5=PA2
 PA5.Signal=GPIO_Output

@@ -24,6 +24,7 @@
 	Interrupt für Pin-Recv deaktivieren
 	Tastereingang zum Senden
 	ir als 2. Sendestruct nehmen, state machine genau so durchlaufen lassen
+ * - Timer in Struct einbauen oder global weiter nutzen?
  *
  */
 /* USER CODE END Header */
@@ -62,71 +63,14 @@ UART_HandleTypeDef huart2;
 
 /* USER CODE BEGIN PV */
 
-typedef struct
+struct receive_str
 {
-	uint8_t id_0:4;
-	uint8_t counter_0:4;
-	uint8_t id_1:4;
-	uint8_t counter_1:4;
-	uint8_t id_2:4;
-	uint8_t counter_2:4;
-	uint8_t id_3:4;
-	uint8_t counter_3:4;
-	uint8_t id_4:4;
-	uint8_t none:4; // nur zum auffuellen auf ganzes Byte
-}ir_msg_dt;
+	ir_dt rcvIr;
 
-typedef struct
-{
-	uint32_t startBit_Pulse;
-	uint32_t startBit_Pause;
-	uint32_t pulse;
-	uint32_t bit1_Pause;
-	uint32_t bit0_Pause;
-
-	uint8_t bitLength; // Wie viele Bit breit ist die Botschaft
-
-	char name[10];
-}ir_config_dt;
-
-typedef enum
-{
-	IR_LEGACY_Ia = 0,
-	IR_LEGACY_Ib,
-	IR_SVX,
-
-	IR_CONFIGS_SIZE
-}ir_configs_en;
-
-ir_config_dt irConfigs[IR_CONFIGS_SIZE] =
-{
-		{.startBit_Pulse = 2000, .startBit_Pause = 12784, .pulse = 650, .bit1_Pause = 1800, .bit0_Pause = 845, .bitLength = 36, .name = "LEGACY a"}, /* IR_LEGACY_Ia */
-		{.startBit_Pulse = 4137, .startBit_Pause =  7705, .pulse = 590, .bit1_Pause = 1530, .bit0_Pause = 590, .bitLength = 36, .name = "LEGACY b"}, /* IR_LEGACY_Ib */
-		{.startBit_Pulse = 4200, .startBit_Pause =  8800, .pulse = 650, .bit1_Pause = 1650, .bit0_Pause = 555, .bitLength = 36, .name = "SVX     "}, /* IR_SVX       */
-}; // TODO: zu gleiche Werte!
-
-struct ir
-{
-	volatile uint8_t currentBit; // Auf welches Bit schreibt er gerade?
-
-	enum states
-	{
-		IR_NONE = 0,
-		IR_START_PULSE,
-		IR_START_PAUSE,
-		IR_DATA_STROBE,
-		IR_DATA_PAUSE
-	}state;
-
-	ir_config_dt * config;
-	ir_configs_en curCfg;
-	uint8_t threshold;
-
-	uint8_t buf[5];
-	uint8_t byteCounter;
-	uint8_t newMsg;
-
-}ir;
+	volatile uint32_t currentDelta;
+	volatile uint8_t stateMachine_Flag;
+}rcv;
+ir_dt sendIr;
 
 /* USER CODE END PV */
 
@@ -158,15 +102,26 @@ int _write(int file, char *data, int len)
    return (status == HAL_OK ? len : 0);
 }
 
+void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // Für Blauen Button
+{
+	if(GPIO_Pin == GPIO_PIN_13 && sendIr.state == IR_NONE)
+	{
+		sendIr.state = IR_START_PAUSE;
+
+		// TODO Strobe 47kHz an...
+		__HAL_TIM_SET_COUNTER(&htim10, 0); // Counter wieder auf 0 setzen
+	}
+}
+
 void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) // Für Timeouts
 {
 	if(htim == &htim10)
 	{
 		HAL_GPIO_TogglePin(Testpin_GPIO_Port, Testpin_Pin);
-		if(ir.state != IR_NONE)
+		if(rcv.rcvIr.state != IR_NONE)
 		{
 			printf("Timeout\r\n");
-			ir.state = IR_NONE;
+			rcv.rcvIr.state = IR_NONE;
 			__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 		}
 	}
@@ -177,160 +132,14 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef * htim)
 	IR_Test_LOW;
 	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
 	{
+		rcv.currentDelta = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
 		__HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
 
-		uint32_t currentDelta = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);// - ir.lastTime;
-		uint32_t currentThreshold = (uint32_t) (currentDelta * (float) ir.threshold/100);
+		// Run state machine next time
+		rcv.stateMachine_Flag = 1;
 
-		//ir.lastTime = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
-
-
-		switch(ir.state)
-		{
-			case IR_NONE: // erste fallende Flanke
-//				IR_Test_LOW;
-
-				__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
-
-				//printf("First Flag...\r\n");
-				ir.state++;
-				break;
-
-			case IR_START_PULSE: // Steigende Flanke, Ende Start-Bit
-//				IR_Test_HIGH;
-
-				__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-
-				// Nach Konfiguration suchen
-				ir.curCfg = IR_CONFIGS_SIZE;
-				for(ir_configs_en i=0; i<IR_CONFIGS_SIZE; i++)
-				{
-					if(currentDelta > (ir.config[i].startBit_Pulse - currentThreshold) && currentDelta < (ir.config[i].startBit_Pulse + currentThreshold))
-					{
-						ir.curCfg = i;
-						break;
-					}
-				}
-
-				if(ir.curCfg < IR_CONFIGS_SIZE) // Wenn er die Config gefunden hat
-				{
-					ir.state = IR_START_PAUSE;
-				}
-				else
-				{
-					ir.state = IR_NONE;
-					//printf("Start Pulse wrong (got %lu), resetting...\r\n", currentDelta);
-					__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-				}
-				break;
-
-			case IR_START_PAUSE: // Fallende Flanke, Ende Start-Pause
-				// TODO: Eigentlich müsste er hier auch nochmal auf die Config prüfen...
-				//IR_Test_LOW;
-
-				__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
-
-				if(currentDelta > (ir.config[ir.curCfg].startBit_Pause - currentThreshold) && currentDelta < (ir.config[ir.curCfg].startBit_Pause + currentThreshold))
-				{
-					ir.currentBit = 0;
-					ir.state++;
-				}
-				else
-				{
-					ir.state = IR_NONE;
-					//printf("Start Pause wrong (got %lu), resetting...\r\n", currentDelta);
-					__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-				}
-				break;
-
-			case IR_DATA_STROBE: // Steigende Flanke, Ende eines Strobes
-				//IR_Test_HIGH;
-				__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-
-				if(currentDelta > (ir.config[ir.curCfg].pulse - currentThreshold) && currentDelta < (ir.config[ir.curCfg].pulse + currentThreshold))
-				{
-					if(ir.currentBit >= ir.config[ir.curCfg].bitLength) // Wenn alle Bits empfangen wurden zurücksetzen
-					{
-						ir.state = IR_NONE;
-						ir.currentBit = 0;
-						ir.byteCounter = 0;
-
-						ir.newMsg = 1;
-						//__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-					}
-					else
-					{
-						ir.state++;
-					}
-				}
-				else
-				{
-					ir.state = IR_NONE;
-					//printf("Strobe wrong, resetting...\r\n");
-					//__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-				}
-
-				break;
-
-			case IR_DATA_PAUSE: // Fallende Flanke nach 1- oder 0-Pause
-				//IR_Test_LOW;
-
-				__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
-
-				if(currentDelta > (ir.config[ir.curCfg].bit0_Pause - currentThreshold) && currentDelta < (ir.config[ir.curCfg].bit0_Pause + currentThreshold))
-				{
-					ir.buf[ir.byteCounter] |= 0 << (/*7-*/(ir.currentBit % 8));
-					//printf("0");
-					ir.currentBit++;
-
-					ir.state = IR_DATA_STROBE;
-				}
-				else if(currentDelta > (ir.config[ir.curCfg].bit1_Pause - currentThreshold) && currentDelta < (ir.config[ir.curCfg].bit1_Pause + currentThreshold))
-				{
-					ir.buf[ir.byteCounter] |= 1 << (/*7-*/(ir.currentBit % 8));
-					//printf("1");
-					ir.currentBit++;
-
-					ir.state = IR_DATA_STROBE;
-				}
-				else
-				{
-					ir.state = IR_NONE;
-					//printf("Wrong Pause at tbd., resetting...\r\n"); // TODO: Welches Bit?
-					__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-				}
-
-				if((ir.currentBit % 8) == 0)
-				{
-					ir.byteCounter++;
-				}
-				break;
-		}
 	}
 	IR_Test_HIGH;
-}
-
-void IR_Init(void)
-{
-	ir.state = IR_NONE;
-
-	ir.currentBit = 0;
-	ir.byteCounter = 0;
-	memset(ir.buf, 0, 5);
-
-	ir.newMsg = 0;
-
-	ir.config = irConfigs;
-	ir.curCfg = IR_CONFIGS_SIZE; // Als ungültig
-
-	ir.threshold 		=    30; // %
-
-	IR_Test_HIGH;
-	__HAL_TIM_SET_CAPTUREPOLARITY(&htim10, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
-
-	// Timer starten
-	HAL_TIM_IC_Start_IT(&htim10, TIM_CHANNEL_1);
-	HAL_TIM_Base_Start_IT(&htim10);
 }
 
 /* USER CODE END 0 */
@@ -366,9 +175,17 @@ int main(void)
   MX_USART2_UART_Init();
   MX_TIM10_Init();
   /* USER CODE BEGIN 2 */
-
-  IR_Init();
 	
+  IR_Init(&rcv.rcvIr, &htim10);
+  IR_Init(&sendIr, &htim10);
+
+  IR_Test_HIGH;
+  __HAL_TIM_SET_CAPTUREPOLARITY(&htim10, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
+
+  // Timer starten
+  HAL_TIM_IC_Start_IT(&htim10, TIM_CHANNEL_1);
+  HAL_TIM_Base_Start_IT(&htim10);
+
   // Definieren einer Sendenachricht:
   ir_msg_dt sendMsg;
 
@@ -383,7 +200,7 @@ int main(void)
   sendMsg.counter_2 = 0x0;
   sendMsg.counter_3 = 0x1;
 	
-  ir_configs_en currentSendCfg = IR_LEGACY_I;
+  ir_configs_en currentSendCfg = IR_LEGACY_Ia;
 
   printf("IR-Reader v0.1\r\n");
 
@@ -393,32 +210,39 @@ int main(void)
   /* USER CODE BEGIN WHILE */
   while (1)
   {
-	  if(ir.newMsg == 1)
+	  if(rcv.stateMachine_Flag == 1)
+	  {
+		  rcv.stateMachine_Flag = 0;
+
+		  ir_receive_stateMachine(&rcv.rcvIr, rcv.currentDelta);
+	  }
+
+	  if(rcv.rcvIr.newMsg == 1)
 	  {
 		  ir_msg_dt msg;
 		  
-		  ir.newMsg = 0;
+		  rcv.rcvIr.newMsg = 0;
 		  
-		  memcpy(msg, ir.buf, sizeof(ir_msg_dt));
+		  memcpy(&msg, rcv.rcvIr.buf, sizeof(ir_msg_dt));
 
 		  IR_Test_LOW;
-		  //printf("%02X%02X%02X%02X%X\r\n", ir.buf[0], ir.buf[1], ir.buf[2], ir.buf[3], ir.buf[4]/*>>4*/&0x04);
-		  printf(" %X%X%X%X%X %X%X%X%X %s\r\n", ir.buf[0]&0xF, ir.buf[1]&0xF, ir.buf[2]&0xF, ir.buf[3]&0xF, ir.buf[4]&0xF,
-				  	  	  	  	  	  	  	  (ir.buf[0]>>4)&0xF, (ir.buf[1]>>4)&0xF, (ir.buf[2]>>4)&0xF, (ir.buf[3]>>4)&0xF,
-											  ir.config[ir.curCfg].name);
+		  //printf("%02X%02X%02X%02X%X\r\n", rcvIr.buf[0], rcvIr.buf[1], rcvIr.buf[2], rcvIr.buf[3], rcvIr.buf[4]/*>>4*/&0x04);
+		  /*printf(" %X%X%X%X%X %X%X%X%X %s\r\n", rcv.rcvIr.buf[0]&0xF, rcv.rcvIr.buf[1]&0xF, rcv.rcvIr.buf[2]&0xF, rcv.rcvIr.buf[3]&0xF, rcv.rcvIr.buf[4]&0xF,
+				  	  	  	  	  	  	  	  (rcv.rcvIr.buf[0]>>4)&0xF, (rcv.rcvIr.buf[1]>>4)&0xF, (rcv.rcvIr.buf[2]>>4)&0xF, (rcv.rcvIr.buf[3]>>4)&0xF,
+											  rcv.rcvIr.config[rcv.rcvIr.curCfg].name);*/
 		  
 		  printf(" %X%X%X%X%X %X%X%X%X %s\r\n", msg.id_0, msg.id_1, msg.id_2, msg.id_3, msg.id_4,
-				  	 		counter_0, counter_1, counter_2, counter_3,
-							ir.config[ir.curCfg].name);
+				  msg.counter_0, msg.counter_1, msg.counter_2, msg.counter_3,
+				  rcv.rcvIr.config[rcv.rcvIr.curCfg].name);
 		  
 		  IR_Test_HIGH;
 
-		  memset(ir.buf, 0 , 5);
+		  memset(rcv.rcvIr.buf, 0 , 5);
 
-		  ir.curCfg = IR_CONFIGS_SIZE;
+		  rcv.rcvIr.curCfg = IR_CONFIGS_SIZE;
 	  }
 	  /*
-	  if(Schalter.... && ir_send.state == IR_NONE) Schalter
+	  if(Schalter.... && ir_send.state == IR_NONE) Schalter TODO: Oben
 	  {
 		ir_send.state = IR_START_PAUSE;
 		  // TODO Strobe 47kHz an...
@@ -638,6 +462,10 @@ static void MX_GPIO_Init(void)
   GPIO_InitStruct.Pull = GPIO_NOPULL;
   GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_LOW;
   HAL_GPIO_Init(IR_Testpin_GPIO_Port, &GPIO_InitStruct);
+
+  /* EXTI interrupt init*/
+  HAL_NVIC_SetPriority(EXTI15_10_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(EXTI15_10_IRQn);
 
 }
 
