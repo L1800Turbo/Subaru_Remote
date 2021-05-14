@@ -10,6 +10,24 @@
 
 #include "main.h"
 
+
+/**
+ * Aufteilung FB-Nachricht (MSB):
+ * +----------+---------+---------+---------+---------+---------+---------+---------+---------+---------+
+ * | Position |  0...3  | 4...7   | 8...11  | 12...15 | 16...19 | 20...23 | 24...27 | 28...31 | 32...36 |
+ * +----------+---------+---------+---------+---------+---------+---------+---------+---------+---------+
+ * | Funktion |  ID[0]  | Cnt[0]  |  ID[1]  | Cnt[1]  |  ID[2]  | Cnt[2]  |  ID[3]  | Cnt[3]  |  ID[4]  |
+ * +----------+---------+---------+---------+---------+---------+---------+---------+---------+---------+
+ *
+ * Aufteilung nach dieser Struktur (LSB):
+ * +----------+------------------+------------------+------------------+------------------+------------------+
+ * | Position |       7...0      |      15...8      |     23...16      |      31...24     |     40...32      |
+ * +----------+------------------+------------------+------------------+------------------+------------------+
+ * | Funktion |  Cnt[0] / ID[0]  |  Cnt[1] / ID[1]  |  Cnt[2] / ID[2]  |  Cnt[3] / ID[3]  |    nnnn / ID[4]  |
+ * +----------+------------------+------------------+------------------+------------------+------------------+
+ *
+ */
+// TODO: aktuell wäre es so, dass id_0, dann counter_0 kommt, der belegt das byteweise anders rum...
 typedef struct
 {
 	uint8_t id_0:4;
@@ -21,7 +39,7 @@ typedef struct
 	uint8_t id_3:4;
 	uint8_t counter_3:4;
 	uint8_t id_4:4;
-	uint8_t none:4; // nur zum auffuellen auf ganzes Byte
+	uint8_t :4; // nur zum auffuellen auf ganzes Byte
 }ir_msg_dt;
 
 typedef struct
@@ -69,9 +87,17 @@ typedef struct
 
 	TIM_HandleTypeDef * htim; // Timer für Flankenwechsel mit 1µs
 
+	TIM_HandleTypeDef * pwmHtim; // Timer für Sendepulse (nur Senden)
+
+	uint32_t timeGrabber[5]; // Zeiten für alle Zeiten aufzeichnen (Debug-Zwecke)
+
 }ir_dt;
 
-void IR_Init(ir_dt * ir, TIM_HandleTypeDef * htim);
+//void IR_Init(ir_dt * ir, TIM_HandleTypeDef * htim);
+void IR_Init(ir_dt * ir, TIM_HandleTypeDef * htim, TIM_HandleTypeDef * pwmHtim);
 void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta);
+void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta);
+
+void incrementMsgCounter(ir_msg_dt * msg);
 
 #endif /* INC_IR_H_ */

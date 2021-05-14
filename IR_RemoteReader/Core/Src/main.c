@@ -19,12 +19,8 @@
 
 /*
  * TODO:
- * - Sendefunktion:
- 	47kHz-Timer
-	Interrupt für Pin-Recv deaktivieren
-	Tastereingang zum Senden
-	ir als 2. Sendestruct nehmen, state machine genau so durchlaufen lassen
- * - Timer in Struct einbauen oder global weiter nutzen?
+ * - Zeiten passen noch nicht wirklich
+ * - Byteorder nochmal prüfen, das passt irgendwie auch noch nicht
  *
  */
 /* USER CODE END Header */
@@ -57,7 +53,9 @@
 /* USER CODE END PM */
 
 /* Private variables ---------------------------------------------------------*/
+TIM_HandleTypeDef htim1;
 TIM_HandleTypeDef htim10;
+TIM_HandleTypeDef htim11;
 
 UART_HandleTypeDef huart2;
 
@@ -65,12 +63,19 @@ UART_HandleTypeDef huart2;
 
 struct receive_str
 {
-	ir_dt rcvIr;
+	ir_dt ir;
 
 	volatile uint32_t currentDelta;
 	volatile uint8_t stateMachine_Flag;
 }rcv;
-ir_dt sendIr;
+
+struct send_str
+{
+	ir_dt ir;
+
+	ir_msg_dt msg;
+}send;
+
 
 /* USER CODE END PV */
 
@@ -79,6 +84,8 @@ void SystemClock_Config(void);
 static void MX_GPIO_Init(void);
 static void MX_USART2_UART_Init(void);
 static void MX_TIM10_Init(void);
+static void MX_TIM11_Init(void);
+static void MX_TIM1_Init(void);
 /* USER CODE BEGIN PFP */
 
 /* USER CODE END PFP */
@@ -104,12 +111,29 @@ int _write(int file, char *data, int len)
 
 void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // Für Blauen Button
 {
-	if(GPIO_Pin == GPIO_PIN_13 && sendIr.state == IR_NONE)
+	if(GPIO_Pin == GPIO_PIN_13 && send.ir.state == IR_NONE && rcv.ir.state == IR_NONE)
 	{
-		sendIr.state = IR_START_PAUSE;
+		memcpy(send.ir.buf, &send.msg, sizeof(ir_msg_dt));
 
-		// TODO Strobe 47kHz an...
-		__HAL_TIM_SET_COUNTER(&htim10, 0); // Counter wieder auf 0 setzen
+		__HAL_TIM_SET_COUNTER(send.ir.htim, 0); // Counter wieder auf 0 setzen
+		//send.ir.state = IR_START_PULSE;
+
+		HAL_TIM_PWM_Start(send.ir.pwmHtim, TIM_CHANNEL_1);
+		__HAL_TIM_SET_COUNTER(&htim1, 0);
+//		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
+
+
+		incrementMsgCounter(&send.msg); // Count up after each message
+	}
+}
+
+void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
+{
+	if(htim == &htim1)
+	{
+		HAL_TIM_PWM_Stop(send.ir.pwmHtim, TIM_CHANNEL_1);
+
+		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 30000);
 	}
 }
 
@@ -118,19 +142,25 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) // Für Timeouts
 	if(htim == &htim10)
 	{
 		HAL_GPIO_TogglePin(Testpin_GPIO_Port, Testpin_Pin);
-		if(rcv.rcvIr.state != IR_NONE)
+		if(rcv.ir.state != IR_NONE)
 		{
 			printf("Timeout\r\n");
-			rcv.rcvIr.state = IR_NONE;
+			rcv.ir.state = IR_NONE;
 			__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 		}
+
+	}
+	else if(htim == &htim1)
+	{
+		//HAL_TIM_PWM_Stop(send.ir.pwmHtim, TIM_CHANNEL_1);
+		//__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
 	}
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef * htim)
 {
 	IR_Test_LOW;
-	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1 && send.ir.state == IR_NONE) // Nur auswerten, wenn nicht gerade gesendet wird
 	{
 		rcv.currentDelta = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
 		__HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
@@ -140,6 +170,42 @@ void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef * htim)
 
 	}
 	IR_Test_HIGH;
+}
+
+void init_Remote(void) // Initialisierung als Fernbedienung für senden und empfangen
+{
+	/* Receive */
+	// Set next flag to falling
+	__HAL_TIM_SET_CAPTUREPOLARITY(&htim10, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
+
+	// Activate input capture interrupt
+	HAL_TIM_IC_Start_IT(&htim10, TIM_CHANNEL_1);
+
+	// Initialize statemachine and structure
+	IR_Init(&rcv.ir, &htim10, NULL);
+
+
+	/* Send */
+	// Initialize statemachine and structure
+	IR_Init(&send.ir, &htim10, &htim11);
+
+	// Define inital send message
+	send.msg.id_0 = 0x1;
+	send.msg.id_1 = 0x3;
+	send.msg.id_2 = 0xB;
+	send.msg.id_3 = 0x0;
+	send.msg.id_4 = 0x0;
+
+	send.msg.counter_0 = 0x0;
+	send.msg.counter_1 = 0x0;
+	send.msg.counter_2 = 0x1;
+	send.msg.counter_3 = 0xA;
+
+	// Chose transmission timings
+	send.ir.curCfg = IR_LEGACY_Ia;
+
+	/* Common */
+	HAL_TIM_Base_Start_IT(&htim10); // Start common timer
 }
 
 /* USER CODE END 0 */
@@ -174,35 +240,20 @@ int main(void)
   MX_GPIO_Init();
   MX_USART2_UART_Init();
   MX_TIM10_Init();
+  MX_TIM11_Init();
+  MX_TIM1_Init();
   /* USER CODE BEGIN 2 */
 	
-  IR_Init(&rcv.rcvIr, &htim10);
-  IR_Init(&sendIr, &htim10);
+
+  init_Remote();
 
   IR_Test_HIGH;
-  __HAL_TIM_SET_CAPTUREPOLARITY(&htim10, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 
-  // Timer starten
-  HAL_TIM_IC_Start_IT(&htim10, TIM_CHANNEL_1);
-  HAL_TIM_Base_Start_IT(&htim10);
+  printf("IR-Reader v0.2\r\n");
 
-  // Definieren einer Sendenachricht:
-  ir_msg_dt sendMsg;
-
-  sendMsg.id_0 = 0x1;
-  sendMsg.id_1 = 0x3;
-  sendMsg.id_2 = 0xB;
-  sendMsg.id_3 = 0x0;
-  sendMsg.id_4 = 0x0;
-
-  sendMsg.counter_0 = 0x0;
-  sendMsg.counter_1 = 0x0;
-  sendMsg.counter_2 = 0x0;
-  sendMsg.counter_3 = 0x1;
-	
-  ir_configs_en currentSendCfg = IR_LEGACY_Ia;
-
-  printf("IR-Reader v0.1\r\n");
+  HAL_TIM_Base_Start_IT(&htim1); // TEST
+  HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
+	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
 
   /* USER CODE END 2 */
 
@@ -214,85 +265,42 @@ int main(void)
 	  {
 		  rcv.stateMachine_Flag = 0;
 
-		  ir_receive_stateMachine(&rcv.rcvIr, rcv.currentDelta);
+		  ir_receive_stateMachine(&rcv.ir, rcv.currentDelta);
 	  }
 
-	  if(rcv.rcvIr.newMsg == 1)
+	  if(rcv.ir.newMsg == 1)
 	  {
 		  ir_msg_dt msg;
+		  uint32_t times[5]; // Debug-Zeiten
+
+		  memcpy(&msg, rcv.ir.buf, sizeof(ir_msg_dt));
+		  memcpy(times, rcv.ir.timeGrabber, sizeof(times));
 		  
-		  rcv.rcvIr.newMsg = 0;
+		  rcv.ir.newMsg = 0;
 		  
-		  memcpy(&msg, rcv.rcvIr.buf, sizeof(ir_msg_dt));
 
 		  IR_Test_LOW;
-		  //printf("%02X%02X%02X%02X%X\r\n", rcvIr.buf[0], rcvIr.buf[1], rcvIr.buf[2], rcvIr.buf[3], rcvIr.buf[4]/*>>4*/&0x04);
-		  /*printf(" %X%X%X%X%X %X%X%X%X %s\r\n", rcv.rcvIr.buf[0]&0xF, rcv.rcvIr.buf[1]&0xF, rcv.rcvIr.buf[2]&0xF, rcv.rcvIr.buf[3]&0xF, rcv.rcvIr.buf[4]&0xF,
-				  	  	  	  	  	  	  	  (rcv.rcvIr.buf[0]>>4)&0xF, (rcv.rcvIr.buf[1]>>4)&0xF, (rcv.rcvIr.buf[2]>>4)&0xF, (rcv.rcvIr.buf[3]>>4)&0xF,
-											  rcv.rcvIr.config[rcv.rcvIr.curCfg].name);*/
+		  //printf("%02X%02X%02X%02X%X\r\n", ir.buf[0], ir.buf[1], ir.buf[2], ir.buf[3], ir.buf[4]/*>>4*/&0x04);
+		  /*printf(" %X%X%X%X%X %X%X%X%X %s\r\n", rcv.ir.buf[0]&0xF, rcv.ir.buf[1]&0xF, rcv.ir.buf[2]&0xF, rcv.ir.buf[3]&0xF, rcv.ir.buf[4]&0xF,
+				  	  	  	  	  	  	  	  (rcv.ir.buf[0]>>4)&0xF, (rcv.ir.buf[1]>>4)&0xF, (rcv.ir.buf[2]>>4)&0xF, (rcv.ir.buf[3]>>4)&0xF,
+											  rcv.ir.config[rcv.ir.curCfg].name);*/
 		  
 		  printf(" %X%X%X%X%X %X%X%X%X %s\r\n", msg.id_0, msg.id_1, msg.id_2, msg.id_3, msg.id_4,
 				  msg.counter_0, msg.counter_1, msg.counter_2, msg.counter_3,
-				  rcv.rcvIr.config[rcv.rcvIr.curCfg].name);
+				  rcv.ir.config[rcv.ir.curCfg].name);
 		  
+		  printf("Zeiten: %lu %lu %lu %lu %lu\r\n", times[0], times[1], times[2], times[3], times[4]);
+
 		  IR_Test_HIGH;
 
-		  memset(rcv.rcvIr.buf, 0 , 5);
+		  memset(rcv.ir.buf, 0 , 5);
 
-		  rcv.rcvIr.curCfg = IR_CONFIGS_SIZE;
+		  rcv.ir.curCfg = IR_CONFIGS_SIZE;
 	  }
-	  /*
-	  if(Schalter.... && ir_send.state == IR_NONE) Schalter TODO: Oben
-	  {
-		ir_send.state = IR_START_PAUSE;
-		  // TODO Strobe 47kHz an...
-		__HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
-	  }
-		  
-	  switch(ir_send.state)
-	  {
-		case IR_NONE: 
-			  // nichts tun...
-			break;
-			  
-		  case IR_START_PULSE: // am Ende eines Startpulses...
-			  if(HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1) > ir_send.config[currentSendCfg].startBit_Pulse)
-			  {
-				  // TODO Strobe 47kHz aus...
-				  
-				  ir_send.state = IR_START_PAUSE;
-				  __HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
-			  }
-			  break;
-		  case IR_START_PAUSE:
-			if(HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1) > ir_send.config[currentSendCfg].startBit_Pause)
-			{
-				// TODO Strobe 47kHz an...
-				
-				ir_send.state = IR_DATA_STROBE;
-				__HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
-			}
-			  break;
-			  
-		case IR_DATA_STROBE:
-			  if(HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1) > ir_send.config[currentSendCfg].pulse)
-			  {
-				  // TODO Strobe 47kHz aus...
-				  
-				  
-			  }
-			  break;
-			  
-		case IR_DATA_PAUSE:
-			  // Bits durchgehen
-			  
-			  break;
-			  
-			  //....
-
-			  // Wenn alles durch ist: 				  sendMsg.counter_3 ++; // TODO nur bis F!!
-	  }*/
 	  
+	  // TODO: Das könnte auf diese Weise zu lahm sein, die Bitzeiten sehen noch nicht wirklich passend aus...
+	  ir_send_stateMachine(&send.ir, __HAL_TIM_GetCounter(send.ir.htim));
+
     /* USER CODE END WHILE */
 
     /* USER CODE BEGIN 3 */
@@ -345,6 +353,80 @@ void SystemClock_Config(void)
 }
 
 /**
+  * @brief TIM1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM1_Init(void)
+{
+
+  /* USER CODE BEGIN TIM1_Init 0 */
+
+  /* USER CODE END TIM1_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+  TIM_BreakDeadTimeConfigTypeDef sBreakDeadTimeConfig = {0};
+
+  /* USER CODE BEGIN TIM1_Init 1 */
+
+  /* USER CODE END TIM1_Init 1 */
+  htim1.Instance = TIM1;
+  htim1.Init.Prescaler = 84-1;
+  htim1.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim1.Init.Period = 65535;
+  htim1.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim1.Init.RepetitionCounter = 0;
+  htim1.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim1, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_OC_Init(&htim1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim1, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_TIMING;
+  sConfigOC.Pulse = 10000;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCNPolarity = TIM_OCNPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  sConfigOC.OCIdleState = TIM_OCIDLESTATE_RESET;
+  sConfigOC.OCNIdleState = TIM_OCNIDLESTATE_RESET;
+  if (HAL_TIM_OC_ConfigChannel(&htim1, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sBreakDeadTimeConfig.OffStateRunMode = TIM_OSSR_DISABLE;
+  sBreakDeadTimeConfig.OffStateIDLEMode = TIM_OSSI_DISABLE;
+  sBreakDeadTimeConfig.LockLevel = TIM_LOCKLEVEL_OFF;
+  sBreakDeadTimeConfig.DeadTime = 0;
+  sBreakDeadTimeConfig.BreakState = TIM_BREAK_DISABLE;
+  sBreakDeadTimeConfig.BreakPolarity = TIM_BREAKPOLARITY_HIGH;
+  sBreakDeadTimeConfig.AutomaticOutput = TIM_AUTOMATICOUTPUT_DISABLE;
+  if (HAL_TIMEx_ConfigBreakDeadTime(&htim1, &sBreakDeadTimeConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM1_Init 2 */
+
+  /* USER CODE END TIM1_Init 2 */
+
+}
+
+/**
   * @brief TIM10 Initialization Function
   * @param None
   * @retval None
@@ -386,6 +468,52 @@ static void MX_TIM10_Init(void)
   /* USER CODE BEGIN TIM10_Init 2 */
 
   /* USER CODE END TIM10_Init 2 */
+
+}
+
+/**
+  * @brief TIM11 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM11_Init(void)
+{
+
+  /* USER CODE BEGIN TIM11_Init 0 */
+
+  /* USER CODE END TIM11_Init 0 */
+
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM11_Init 1 */
+
+  /* USER CODE END TIM11_Init 1 */
+  htim11.Instance = TIM11;
+  htim11.Init.Prescaler = 42-1;
+  htim11.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim11.Init.Period = 2*21;
+  htim11.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim11.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_ENABLE;
+  if (HAL_TIM_Base_Init(&htim11) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim11) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 21;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim11, &sConfigOC, TIM_CHANNEL_1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM11_Init 2 */
+
+  /* USER CODE END TIM11_Init 2 */
+  HAL_TIM_MspPostInit(&htim11);
 
 }
 
