@@ -115,15 +115,18 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // Für Blauen Button
 	{
 		memcpy(send.ir.buf, &send.msg, sizeof(ir_msg_dt));
 
-		__HAL_TIM_SET_COUNTER(send.ir.htim, 0); // Counter wieder auf 0 setzen
-		//send.ir.state = IR_START_PULSE;
+		//__HAL_TIM_SET_COUNTER(send.ir.htim, 0); // Counter wieder auf 0 setzen
+		send.ir.state = IR_START_PULSE;
 
 		HAL_TIM_PWM_Start(send.ir.pwmHtim, TIM_CHANNEL_1);
+
 		__HAL_TIM_SET_COUNTER(&htim1, 0);
-//		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
+
+		// Erster Wert: Start-Pulse
+		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, send.ir.config[send.ir.curCfg].startBit_Pulse);
 
 
-		incrementMsgCounter(&send.msg); // Count up after each message
+		incrementMsgCounter(&send.msg); // Count up after each message TODO woanders hin
 	}
 }
 
@@ -131,9 +134,11 @@ void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
 	if(htim == &htim1)
 	{
-		HAL_TIM_PWM_Stop(send.ir.pwmHtim, TIM_CHANNEL_1);
+		//HAL_TIM_PWM_Stop(send.ir.pwmHtim, TIM_CHANNEL_1);
 
-		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 30000);
+		//__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 30000);
+		ir_send_stateMachine(&send.ir, HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1));
+		__HAL_TIM_SET_COUNTER(&htim1, 0);
 	}
 }
 
@@ -160,7 +165,7 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) // Für Timeouts
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef * htim)
 {
 	IR_Test_LOW;
-	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1 && send.ir.state == IR_NONE) // Nur auswerten, wenn nicht gerade gesendet wird
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1 /*&& send.ir.state == IR_NONE*/) // TODO... nicht Nur auswerten, wenn nicht gerade gesendet wird
 	{
 		rcv.currentDelta = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
 		__HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
@@ -184,10 +189,13 @@ void init_Remote(void) // Initialisierung als Fernbedienung für senden und empf
 	// Initialize statemachine and structure
 	IR_Init(&rcv.ir, &htim10, NULL);
 
+	HAL_TIM_Base_Start_IT(&htim10); // Start receive timer
+
 
 	/* Send */
 	// Initialize statemachine and structure
-	IR_Init(&send.ir, &htim10, &htim11);
+	//IR_Init(&send.ir, &htim10, &htim11);
+	IR_Init(&send.ir, &htim1, &htim11);
 
 	// Define inital send message
 	send.msg.id_0 = 0x1;
@@ -204,8 +212,8 @@ void init_Remote(void) // Initialisierung als Fernbedienung für senden und empf
 	// Chose transmission timings
 	send.ir.curCfg = IR_LEGACY_Ia;
 
-	/* Common */
-	HAL_TIM_Base_Start_IT(&htim10); // Start common timer
+	HAL_TIM_Base_Start_IT(&htim1);
+	HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1); // TODO: nicht erst beim drücken?
 }
 
 /* USER CODE END 0 */
@@ -251,9 +259,7 @@ int main(void)
 
   printf("IR-Reader v0.2\r\n");
 
-  HAL_TIM_Base_Start_IT(&htim1); // TEST
-  HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1);
-	__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
+	//__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
 
   /* USER CODE END 2 */
 
@@ -299,7 +305,7 @@ int main(void)
 	  }
 	  
 	  // TODO: Das könnte auf diese Weise zu lahm sein, die Bitzeiten sehen noch nicht wirklich passend aus...
-	  ir_send_stateMachine(&send.ir, __HAL_TIM_GetCounter(send.ir.htim));
+	  //ir_send_stateMachine(&send.ir, __HAL_TIM_GetCounter(send.ir.htim));
 
     /* USER CODE END WHILE */
 

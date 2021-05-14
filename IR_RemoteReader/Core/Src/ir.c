@@ -214,27 +214,29 @@ void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			break;
 
 		case IR_START_PULSE: // am Ende eines Startpulses...
-			if(currentDelta > ir->config[ir->curCfg].startBit_Pulse)
+		//	if(currentDelta > ir->config[ir->curCfg].startBit_Pulse)
 			{
 				HAL_TIM_PWM_Stop(ir->pwmHtim, TIM_CHANNEL_1);
 
 				ir->state = IR_START_PAUSE;
-				__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+				//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+				__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].startBit_Pause);
 			}
 			break;
 
 		case IR_START_PAUSE:
-			if(currentDelta > ir->config[ir->curCfg].startBit_Pause)
+			//if(currentDelta > ir->config[ir->curCfg].startBit_Pause)
 			{
 				HAL_TIM_PWM_Start(ir->pwmHtim, TIM_CHANNEL_1);
 
 				ir->state = IR_DATA_STROBE;
-				__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+				//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+				__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].pulse);
 			}
 			break;
 
 		case IR_DATA_STROBE:
-			if(currentDelta > ir->config[ir->curCfg].pulse)
+			//if(currentDelta > ir->config[ir->curCfg].pulse)
 			{
 				HAL_TIM_PWM_Stop(ir->pwmHtim, TIM_CHANNEL_1);
 
@@ -250,7 +252,20 @@ void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
 				{
 					ir->state = IR_DATA_PAUSE;
 
-					__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+					//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+
+					// Nächste Weite abhängig vom Bit setzen...
+					currentBitmask = ir->buf[ir->byteCounter] & (1<<(ir->currentBit % 8));
+
+					if(currentBitmask >= 1)
+					{
+						__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].bit1_Pause);
+					}
+					else
+					{
+						__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].bit0_Pause);
+					}
+
 				}
 
 			}
@@ -259,19 +274,19 @@ void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
 		case IR_DATA_PAUSE:
 // TODO: die 1en findet er irgendwie noch nicht im Buffer...
 			currentBitmask = ir->buf[ir->byteCounter] & (1<<(/*7-*/ (ir->currentBit % 8)));
-			if(
+			/*if(
 			    (
 				    ( currentBitmask >= 1)
 				    &&
-				    currentDelta > ir->config[ir->curCfg].bit1_Pause
+				    currentDelta >= ir->config[ir->curCfg].bit1_Pause
 				)
 				||
 				(
 					( currentBitmask == 0 )
 					&&
-					(currentDelta > ir->config[ir->curCfg].bit0_Pause)
+					(currentDelta >= ir->config[ir->curCfg].bit0_Pause)
 				)
-			  )
+			  )*/
 			{
 				HAL_TIM_PWM_Start(ir->pwmHtim, TIM_CHANNEL_1);
 
@@ -283,7 +298,8 @@ void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
 					ir->byteCounter++;
 				}
 
-				__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+				//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
+				__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].pulse);
 			}
 
 			break;
@@ -295,19 +311,22 @@ void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
 
 void incrementMsgCounter(ir_msg_dt * msg)
 {
-	msg->counter_3 = (msg->counter_3+1) & 0xF;
-
-	if(msg->counter_3 == 0)
+	for(uint8_t i=0; i<3; i++) // Die FB zählt immer in 3er-Schritten hoch
 	{
-		msg->counter_2 = (msg->counter_2+1) & 0xF;
+		msg->counter_3 = (msg->counter_3+1) & 0xF;
 
-		if(msg->counter_2 == 0)
+		if(msg->counter_3 == 0)
 		{
-			msg->counter_1 = (msg->counter_1+1) & 0xF;
+			msg->counter_2 = (msg->counter_2+1) & 0xF;
 
-			if(msg->counter_1 == 0)
+			if(msg->counter_2 == 0)
 			{
-				msg->counter_0 = (msg->counter_0+1) & 0xF;
+				msg->counter_1 = (msg->counter_1+1) & 0xF;
+
+				if(msg->counter_1 == 0)
+				{
+					msg->counter_0 = (msg->counter_0+1) & 0xF;
+				}
 			}
 		}
 	}
