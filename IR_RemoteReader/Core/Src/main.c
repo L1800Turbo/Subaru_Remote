@@ -115,30 +115,27 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // Für Blauen Button
 	{
 		memcpy(send.ir.buf, &send.msg, sizeof(ir_msg_dt));
 
-		//__HAL_TIM_SET_COUNTER(send.ir.htim, 0); // Counter wieder auf 0 setzen
 		send.ir.state = IR_START_PULSE;
 
 		HAL_TIM_PWM_Start(send.ir.pwmHtim, TIM_CHANNEL_1);
 
-		__HAL_TIM_SET_COUNTER(&htim1, 0);
+		// Erster Wert: Start-Pulse als Output compare
+		__HAL_TIM_SET_COUNTER(send.ir.htim, 0);
+		__HAL_TIM_SET_COMPARE(send.ir.htim, TIM_CHANNEL_1, send.ir.config[send.ir.curCfg].startBit_Pulse);
 
-		// Erster Wert: Start-Pulse
-		__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, send.ir.config[send.ir.curCfg].startBit_Pulse);
-
-
-		incrementMsgCounter(&send.msg); // Count up after each message TODO woanders hin
+		incrementMsgCounter(&send.msg); // Count up after each message // TODO: in EPROM
 	}
 }
 
+// Output compare
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	if(htim == &htim1)
+	if(htim == send.ir.htim /*&htim1*/) // TODO testen
 	{
-		//HAL_TIM_PWM_Stop(send.ir.pwmHtim, TIM_CHANNEL_1);
-
-		//__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 30000);
-		ir_send_stateMachine(&send.ir, HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1));
-		__HAL_TIM_SET_COUNTER(&htim1, 0);
+		// run state machine tast for sending
+		ir_send_stateMachine(&send.ir/*, HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1)*/);
+		//__HAL_TIM_SET_COUNTER(&htim1, 0); // reset counter
+		__HAL_TIM_SET_COUNTER(send.ir.htim, 0); // TODO testen
 	}
 }
 
@@ -155,17 +152,12 @@ void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim) // Für Timeouts
 		}
 
 	}
-	else if(htim == &htim1)
-	{
-		//HAL_TIM_PWM_Stop(send.ir.pwmHtim, TIM_CHANNEL_1);
-		//__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
-	}
 }
 
 void HAL_TIM_IC_CaptureCallback(TIM_HandleTypeDef * htim)
 {
 	IR_Test_LOW;
-	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1 /*&& send.ir.state == IR_NONE*/) // TODO... nicht Nur auswerten, wenn nicht gerade gesendet wird
+	if(htim->Channel == HAL_TIM_ACTIVE_CHANNEL_1)
 	{
 		rcv.currentDelta = HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1);
 		__HAL_TIM_SET_COUNTER(htim, 0); // Counter wieder auf 0 setzen
@@ -194,26 +186,25 @@ void init_Remote(void) // Initialisierung als Fernbedienung für senden und empf
 
 	/* Send */
 	// Initialize statemachine and structure
-	//IR_Init(&send.ir, &htim10, &htim11);
 	IR_Init(&send.ir, &htim1, &htim11);
 
-	// Define inital send message
+	// Define inital send message TODO EEPROM-Ablage definieren
 	send.msg.id_0 = 0x1;
 	send.msg.id_1 = 0x3;
 	send.msg.id_2 = 0xB;
 	send.msg.id_3 = 0x0;
 	send.msg.id_4 = 0x0;
 
-	send.msg.counter_0 = 0x0;
+	send.msg.counter_0 = 0x3;
 	send.msg.counter_1 = 0x0;
-	send.msg.counter_2 = 0x1;
-	send.msg.counter_3 = 0xA;
+	send.msg.counter_2 = 0x7;
+	send.msg.counter_3 = 0xC;
 
 	// Chose transmission timings
 	send.ir.curCfg = IR_LEGACY_Ia;
 
 	HAL_TIM_Base_Start_IT(&htim1);
-	HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1); // TODO: nicht erst beim drücken?
+	HAL_TIM_OC_Start_IT(&htim1, TIM_CHANNEL_1); // TODO: nicht erst beim drücken? Macht aber Probleme..
 }
 
 /* USER CODE END 0 */
@@ -257,9 +248,7 @@ int main(void)
 
   IR_Test_HIGH;
 
-  printf("IR-Reader v0.2\r\n");
-
-	//__HAL_TIM_SET_COMPARE(&htim1, TIM_CHANNEL_1, 10000);
+  printf("IR-Reader v0.3\r\n");
 
   /* USER CODE END 2 */
 
@@ -284,28 +273,16 @@ int main(void)
 		  
 		  rcv.ir.newMsg = 0;
 		  
-
-		  IR_Test_LOW;
-		  //printf("%02X%02X%02X%02X%X\r\n", ir.buf[0], ir.buf[1], ir.buf[2], ir.buf[3], ir.buf[4]/*>>4*/&0x04);
-		  /*printf(" %X%X%X%X%X %X%X%X%X %s\r\n", rcv.ir.buf[0]&0xF, rcv.ir.buf[1]&0xF, rcv.ir.buf[2]&0xF, rcv.ir.buf[3]&0xF, rcv.ir.buf[4]&0xF,
-				  	  	  	  	  	  	  	  (rcv.ir.buf[0]>>4)&0xF, (rcv.ir.buf[1]>>4)&0xF, (rcv.ir.buf[2]>>4)&0xF, (rcv.ir.buf[3]>>4)&0xF,
-											  rcv.ir.config[rcv.ir.curCfg].name);*/
-		  
 		  printf(" %X%X%X%X%X %X%X%X%X %s\r\n", msg.id_0, msg.id_1, msg.id_2, msg.id_3, msg.id_4,
 				  msg.counter_0, msg.counter_1, msg.counter_2, msg.counter_3,
 				  rcv.ir.config[rcv.ir.curCfg].name);
 		  
 		  printf("Zeiten: %lu %lu %lu %lu %lu\r\n", times[0], times[1], times[2], times[3], times[4]);
 
-		  IR_Test_HIGH;
-
 		  memset(rcv.ir.buf, 0 , 5);
 
 		  rcv.ir.curCfg = IR_CONFIGS_SIZE;
 	  }
-	  
-	  // TODO: Das könnte auf diese Weise zu lahm sein, die Bitzeiten sehen noch nicht wirklich passend aus...
-	  //ir_send_stateMachine(&send.ir, __HAL_TIM_GetCounter(send.ir.htim));
 
     /* USER CODE END WHILE */
 

@@ -10,8 +10,8 @@
 
 ir_config_dt irConfigs[IR_CONFIGS_SIZE] =
 {
-		{.startBit_Pulse = 1800, .startBit_Pause = 13000, .pulse = 660, .bit1_Pause = 1900, .bit0_Pause = 925, .bitLength = 36, .name = "LEGACY a"}, /* IR_LEGACY_Ia */
-		{.startBit_Pulse = 4137, .startBit_Pause =  7705, .pulse = 590, .bit1_Pause = 1530, .bit0_Pause = 590, .bitLength = 36, .name = "LEGACY b"}, /* IR_LEGACY_Ib */
+		{.startBit_Pulse = 6278, .startBit_Pause =  8567, .pulse = 650, .bit1_Pause = 1800, .bit0_Pause = 800, .bitLength = 36, .name = "LEGACY a"}, /* IR_LEGACY_Ia */
+		{.startBit_Pulse = 1700, .startBit_Pause = 13100, .pulse = 660, .bit1_Pause = 1900, .bit0_Pause = 925, .bitLength = 36, .name = "LEGACY b"}, /* IR_LEGACY_Ib */
 		{.startBit_Pulse = 4200, .startBit_Pause =  8800, .pulse = 650, .bit1_Pause = 1650, .bit0_Pause = 555, .bitLength = 36, .name = "SVX     "}, /* IR_SVX       */
 }; // TODO: zu gleiche Werte!
 
@@ -28,7 +28,7 @@ void IR_Init(ir_dt * ir, TIM_HandleTypeDef * htim, TIM_HandleTypeDef * pwmHtim)
 	ir->config = irConfigs;
 	ir->curCfg = IR_CONFIGS_SIZE; // Als ungültig
 
-	ir->threshold 		=    30; // %
+	ir->threshold =    30; // %
 
 	ir->htim = htim; // Verwendeter 1µs timer
 
@@ -49,17 +49,12 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 	switch(ir->state)
 	{
 		case IR_NONE: // erste fallende Flanke
-//				IR_Test_LOW;
-
 			__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
 
-			//printf("First Flag...\r\n");
 			ir->state++;
 			break;
 
 		case IR_START_PULSE: // Steigende Flanke, Ende Start-Bit
-//				IR_Test_HIGH;
-
 			__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 
 			// Nach Konfiguration suchen
@@ -82,15 +77,16 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			else
 			{
 				ir->state = IR_NONE;
-				//printf("Start Pulse wrong (got %lu), resetting...\r\n", currentDelta);
+
+				ir->err.no  = IR_ERR_START_PULSE;
+				ir->err.val = currentDelta;
+				//printf("Start Pulse wrong (got %lu), resetting...\r\n", currentDelta); TODO Weg
 				__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 			}
 			break;
 
 		case IR_START_PAUSE: // Fallende Flanke, Ende Start-Pause
 			// TODO: Eigentlich müsste er hier auch nochmal auf die Config prüfen...
-			//IR_Test_LOW;
-
 			__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_RISING);
 
 			if(currentDelta > (ir->config[ir->curCfg].startBit_Pause - currentThreshold) && currentDelta < (ir->config[ir->curCfg].startBit_Pause + currentThreshold))
@@ -103,13 +99,15 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			else
 			{
 				ir->state = IR_NONE;
+
+				ir->err.no  = IR_ERR_START_PAUSE;
+				ir->err.val = currentDelta;
 				//printf("Start Pause wrong (got %lu), resetting...\r\n", currentDelta);
 				__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 			}
 			break;
 
 		case IR_DATA_STROBE: // Steigende Flanke, Ende eines Strobes
-			//IR_Test_HIGH;
 			__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 
 			if(currentDelta > (ir->config[ir->curCfg].pulse - currentThreshold) && currentDelta < (ir->config[ir->curCfg].pulse + currentThreshold))
@@ -132,7 +130,6 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 					ir->byteCounter = 0;
 
 					ir->newMsg = 1;
-					//__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 				}
 				else
 				{
@@ -144,7 +141,6 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			{
 				ir->state = IR_NONE;
 				//printf("Strobe wrong, resetting...\r\n");
-				//__HAL_TIM_SET_CAPTUREPOLARITY(htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 			}
 
 			break;
@@ -156,8 +152,7 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 
 			if(currentDelta > (ir->config[ir->curCfg].bit0_Pause - currentThreshold) && currentDelta < (ir->config[ir->curCfg].bit0_Pause + currentThreshold))
 			{
-				ir->buf[ir->byteCounter] |= 0 << (/*7-*/(ir->currentBit % 8)); // TODO: Eine 0 odern geht gar nicht!
-				//printf("0");
+				//ir->buf[ir->byteCounter] |= 0 << (ir->currentBit % 8); // TODO: Eine 0 odern geht gar nicht! TESTEN
 				ir->currentBit++;
 
 				ir->state = IR_DATA_STROBE;
@@ -173,8 +168,7 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			}
 			else if(currentDelta > (ir->config[ir->curCfg].bit1_Pause - currentThreshold) && currentDelta < (ir->config[ir->curCfg].bit1_Pause + currentThreshold))
 			{
-				ir->buf[ir->byteCounter] |= 1 << (/*7-*/(ir->currentBit % 8));
-				//printf("1");
+				ir->buf[ir->byteCounter] |= 1 << (ir->currentBit % 8);
 				ir->currentBit++; // in dieser Richtung LSB
 
 				ir->state = IR_DATA_STROBE;
@@ -191,7 +185,6 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			else
 			{
 				ir->state = IR_NONE;
-				//printf("Wrong Pause at tbd., resetting...\r\n"); // TODO: Welches Bit?
 				__HAL_TIM_SET_CAPTUREPOLARITY(ir->htim, TIM_CHANNEL_1, TIM_INPUTCHANNELPOLARITY_FALLING);
 			}
 
@@ -203,7 +196,7 @@ void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta)
 	}
 }
 
-void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
+void ir_send_stateMachine(ir_dt * ir /*, uint32_t currentDelta*/)
 {
 	uint8_t currentBitmask = 0;
 
@@ -214,104 +207,66 @@ void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta)
 			break;
 
 		case IR_START_PULSE: // am Ende eines Startpulses...
-		//	if(currentDelta > ir->config[ir->curCfg].startBit_Pulse)
-			{
-				HAL_TIM_PWM_Stop(ir->pwmHtim, TIM_CHANNEL_1);
+			HAL_TIM_PWM_Stop(ir->pwmHtim, TIM_CHANNEL_1);
 
-				ir->state = IR_START_PAUSE;
-				//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
-				__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].startBit_Pause);
-			}
+			ir->state = IR_START_PAUSE;
+			__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].startBit_Pause);
 			break;
 
 		case IR_START_PAUSE:
-			//if(currentDelta > ir->config[ir->curCfg].startBit_Pause)
-			{
-				HAL_TIM_PWM_Start(ir->pwmHtim, TIM_CHANNEL_1);
+			HAL_TIM_PWM_Start(ir->pwmHtim, TIM_CHANNEL_1);
 
-				ir->state = IR_DATA_STROBE;
-				//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
-				__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].pulse);
-			}
+			ir->state = IR_DATA_STROBE;
+			__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].pulse);
 			break;
 
 		case IR_DATA_STROBE:
-			//if(currentDelta > ir->config[ir->curCfg].pulse)
+			HAL_TIM_PWM_Stop(ir->pwmHtim, TIM_CHANNEL_1);
+
+			if(ir->currentBit >= ir->config[ir->curCfg].bitLength) // Wenn alle Bits empfangen wurden zurücksetzen
 			{
-				HAL_TIM_PWM_Stop(ir->pwmHtim, TIM_CHANNEL_1);
+				ir->state = IR_NONE;
+				ir->currentBit = 0;
+				ir->byteCounter = 0;
+			}
+			else
+			{
+				ir->state = IR_DATA_PAUSE;
 
-				if(ir->currentBit >= ir->config[ir->curCfg].bitLength) // Wenn alle Bits empfangen wurden zurücksetzen
+				// Nächste Weite abhängig vom Bit setzen...
+				currentBitmask = ir->buf[ir->byteCounter] & (1<<(ir->currentBit % 8));
+
+				if(currentBitmask >= 1)
 				{
-					ir->state = IR_NONE;
-					ir->currentBit = 0;
-					ir->byteCounter = 0;
-
-					// Sowas... sendMsg.counter_3 ++; // TODO nur bis F!!
+					__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].bit1_Pause);
 				}
 				else
 				{
-					ir->state = IR_DATA_PAUSE;
-
-					//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
-
-					// Nächste Weite abhängig vom Bit setzen...
-					currentBitmask = ir->buf[ir->byteCounter] & (1<<(ir->currentBit % 8));
-
-					if(currentBitmask >= 1)
-					{
-						__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].bit1_Pause);
-					}
-					else
-					{
-						__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].bit0_Pause);
-					}
-
+					__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].bit0_Pause);
 				}
 
 			}
 			break;
 
 		case IR_DATA_PAUSE:
-// TODO: die 1en findet er irgendwie noch nicht im Buffer...
-			currentBitmask = ir->buf[ir->byteCounter] & (1<<(/*7-*/ (ir->currentBit % 8)));
-			/*if(
-			    (
-				    ( currentBitmask >= 1)
-				    &&
-				    currentDelta >= ir->config[ir->curCfg].bit1_Pause
-				)
-				||
-				(
-					( currentBitmask == 0 )
-					&&
-					(currentDelta >= ir->config[ir->curCfg].bit0_Pause)
-				)
-			  )*/
+			HAL_TIM_PWM_Start(ir->pwmHtim, TIM_CHANNEL_1);
+
+			ir->state = IR_DATA_STROBE;
+			ir->currentBit++;
+
+			if((ir->currentBit % 8) == 0)
 			{
-				HAL_TIM_PWM_Start(ir->pwmHtim, TIM_CHANNEL_1);
-
-				ir->state = IR_DATA_STROBE;
-				ir->currentBit++;
-
-				if((ir->currentBit % 8) == 0)
-				{
-					ir->byteCounter++;
-				}
-
-				//__HAL_TIM_SET_COUNTER(ir->htim, 0); // Counter wieder auf 0 setzen
-				__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].pulse);
+				ir->byteCounter++;
 			}
 
+			__HAL_TIM_SET_COMPARE(ir->htim, TIM_CHANNEL_1, ir->config[ir->curCfg].pulse);
 			break;
-
-		//....
-
 	}
 }
 
 void incrementMsgCounter(ir_msg_dt * msg)
 {
-	for(uint8_t i=0; i<3; i++) // Die FB zählt immer in 3er-Schritten hoch
+	for(uint8_t i=0; i<3; i++) // Die FB zählt immer in 3er-Schritten hoch TODO umbauen auf n+3%0xF, dann neu < alt prüfen
 	{
 		msg->counter_3 = (msg->counter_3+1) & 0xF;
 

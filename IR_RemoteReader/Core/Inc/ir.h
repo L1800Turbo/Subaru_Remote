@@ -77,6 +77,19 @@ typedef struct
 		IR_DATA_PAUSE
 	}state;
 
+	// Error number with last value
+	struct error
+	{
+		enum error_values
+		{
+			IR_ERR_NONE = 0,
+			IR_ERR_START_PULSE, /* Start pulse wrong */
+			IR_ERR_START_PAUSE, /* Start pause wrong */
+		}no;
+
+		uint32_t val;
+	}err;
+
 	ir_config_dt * config;
 	ir_configs_en curCfg;
 	uint8_t threshold;
@@ -96,7 +109,7 @@ typedef struct
 //void IR_Init(ir_dt * ir, TIM_HandleTypeDef * htim);
 void IR_Init(ir_dt * ir, TIM_HandleTypeDef * htim, TIM_HandleTypeDef * pwmHtim);
 void ir_receive_stateMachine(ir_dt * ir, uint32_t currentDelta);
-void ir_send_stateMachine(ir_dt * ir, uint32_t currentDelta);
+void ir_send_stateMachine(ir_dt * ir);
 
 void incrementMsgCounter(ir_msg_dt * msg);
 
