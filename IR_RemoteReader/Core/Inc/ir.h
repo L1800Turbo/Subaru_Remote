@@ -19,7 +19,7 @@
  * | Funktion |  ID[0]  | Cnt[0]  |  ID[1]  | Cnt[1]  |  ID[2]  | Cnt[2]  |  ID[3]  | Cnt[3]  |  ID[4]  |
  * +----------+---------+---------+---------+---------+---------+---------+---------+---------+---------+
  *
- * Aufteilung nach dieser Struktur (LSB):
+ * Aufteilung eines Buffers, passend zu dieser Struktur (MSB durch verdreht einlesen):
  * +----------+------------------+------------------+------------------+------------------+------------------+
  * | Position |       7...0      |      15...8      |     23...16      |      31...24     |     40...32      |
  * +----------+------------------+------------------+------------------+------------------+------------------+
@@ -27,7 +27,6 @@
  * +----------+------------------+------------------+------------------+------------------+------------------+
  *
  */
-// TODO: aktuell wäre es so, dass id_0, dann counter_0 kommt, der belegt das byteweise anders rum...
 typedef struct
 {
 	uint8_t id_0:4;
@@ -85,6 +84,8 @@ typedef struct
 			IR_ERR_NONE = 0,
 			IR_ERR_START_PULSE, /* Start pulse wrong */
 			IR_ERR_START_PAUSE, /* Start pause wrong */
+			IR_ERR_STROBE,		/* Strobe pulse wrong */
+			IR_ERR_PAUSE		/* Pause for 1 or 0 unknown */
 		}no;
 
 		uint32_t val;
