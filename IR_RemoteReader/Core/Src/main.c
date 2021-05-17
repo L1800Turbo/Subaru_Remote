@@ -19,8 +19,8 @@
 
 /*
  * TODO:
- * - Zeiten passen noch nicht wirklich
- * - Byteorder nochmal prüfen, das passt irgendwie auch noch nicht
+ * - EEPROM-Verwaltung für "echten" Schlüssel, falls dieser auf STM32-Basis entstehen soll
+ * - er scheint seinen eigenen Senden-Stream, der für das Auto funktioniert, nicht mehr vernünftig zu empfangen...
  *
  */
 /* USER CODE END Header */
@@ -123,19 +123,18 @@ void HAL_GPIO_EXTI_Callback(uint16_t GPIO_Pin) // Für Blauen Button
 		__HAL_TIM_SET_COUNTER(send.ir.htim, 0);
 		__HAL_TIM_SET_COMPARE(send.ir.htim, TIM_CHANNEL_1, send.ir.config[send.ir.curCfg].startBit_Pulse);
 
-		incrementMsgCounter(&send.msg); // Count up after each message // TODO: in EPROM
+		incrementMsgCounter(&send.msg); // Count up after each message
 	}
 }
 
 // Output compare
 void HAL_TIM_OC_DelayElapsedCallback(TIM_HandleTypeDef *htim)
 {
-	if(htim == send.ir.htim /*&htim1*/) // TODO testen
+	if(htim == send.ir.htim)
 	{
 		// run state machine tast for sending
-		ir_send_stateMachine(&send.ir/*, HAL_TIM_ReadCapturedValue(htim, TIM_CHANNEL_1)*/);
-		//__HAL_TIM_SET_COUNTER(&htim1, 0); // reset counter
-		__HAL_TIM_SET_COUNTER(send.ir.htim, 0); // TODO testen
+		ir_send_stateMachine(&send.ir);
+		__HAL_TIM_SET_COUNTER(send.ir.htim, 0);
 	}
 }
 
@@ -188,7 +187,7 @@ void init_Remote(void) // Initialisierung als Fernbedienung für senden und empf
 	// Initialize statemachine and structure
 	IR_Init(&send.ir, &htim1, &htim11);
 
-	// Define inital send message TODO EEPROM-Ablage definieren
+	// Define inital send message
 	send.msg.id_0 = 0x1;
 	send.msg.id_1 = 0x3;
 	send.msg.id_2 = 0xB;
@@ -282,6 +281,32 @@ int main(void)
 		  memset(rcv.ir.buf, 0 , 5);
 
 		  rcv.ir.curCfg = IR_CONFIGS_SIZE;
+	  }
+
+	  // show error if existing
+	  if(rcv.ir.err.no != IR_ERR_NONE)
+	  {
+		  switch(rcv.ir.err.no)
+		  {
+		  	  case IR_ERR_START_PULSE:
+		  		  printf("Start pulse wrong: ");
+		  		  break;
+		  	  case IR_ERR_START_PAUSE:
+		  		  printf("Start pause wrong: ");
+		  		  break;
+		  	  case IR_ERR_STROBE:
+		  		  printf("Strobe wrong: ");
+		  		  break;
+		  	  case IR_ERR_PAUSE:
+		  		  printf("Bit pause unknown: ");
+		  		  break;
+		  	  default:
+		  		  printf("Undefined error: ");
+		  		  break;
+		  }
+		  printf("%lu\r\n", rcv.ir.err.val);
+
+		  rcv.ir.err.no = IR_ERR_NONE; // reset error flag
 	  }
 
     /* USER CODE END WHILE */
